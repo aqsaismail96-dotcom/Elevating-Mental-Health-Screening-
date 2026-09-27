@@ -1,155 +1,276 @@
+
+
+
+
 clc;
 clear;
 close all;
 
 %% =========================================================
-%  LOAD AUDIO
+% LPC + MFCC FEATURE FUSION
+% TOTAL = 75 FEATURES
+% LPC = 10
+% MFCC = 65
 % ==========================================================
 
-[audio, fs] = audioread('2937-1-0-0.wav');
 
-% Convert stereo to mono
+%% LOAD PREPROCESSED 3-SECOND AUDIO
+
+[file,path] = uigetfile('*.wav', ...
+    'Select a preprocessed 3-second WAV segment');
+
+if isequal(file,0)
+    error('No audio file selected.');
+end
+
+[audio,fs] = audioread(fullfile(path,file));
+
+
+%% =========================================================
+% MONO CONVERSION
+% ==========================================================
+
 if size(audio,2) > 1
     audio = mean(audio,2);
 end
 
-% Resample to 16 kHz
+
+%% =========================================================
+% RESAMPLE TO 16 kHz
+% ==========================================================
+
 targetFs = 16000;
 
 if fs ~= targetFs
-    audio = resample(audio, targetFs, fs);
+
+    audio = resample(audio,targetFs,fs);
+
     fs = targetFs;
+
 end
 
 
 %% =========================================================
-%  LPC PARAMETERS
+% HAMMING WINDOW
 % ==========================================================
 
-p = 10;                 % 10 LPC coefficients
-frameDuration = 40;    % 40 ms frame
-frameLength = round(frameDuration * fs / 1000);
-
-% Frame shift
-frameShift = round(10 * fs / 1000);
+hammingWindow = ...
+    @(N) (0.54 - 0.46*cos(2*pi*(0:N-1)'/(N-1)));
 
 
 %% =========================================================
-%  MFCC PARAMETERS
-% ==========================================================
+% =========================================================
+% PART A: LPC EXTRACTION
+% =========================================================
+% =========================================================
 
-Tw = 25;                % Frame duration = 25 ms
-Ts = 10;                % Frame shift = 10 ms
-alpha = 0.97;           % Pre-emphasis coefficient
+p = 10;
 
-% Hamming window
-hammingWindow = @(N) ...
-    (0.54 - 0.46*cos(2*pi*(0:N-1)'/(N-1)));
+frameDurationLPC = 40;
+frameShiftLPC = 10;
 
-R = [300 3700];         % Frequency range
-M = 20;                 % Number of Mel filters
+frameLengthLPC = ...
+    round(frameDurationLPC * fs / 1000);
 
-N = 13;                 % 13 MFCC coefficients
-L = 22;                 % Cepstral lifter parameter
-
-
-%% =========================================================
-%  MFCC EXTRACTION
-% ==========================================================
-
-[MFCC, FBE, frames] = mfcc( ...
-    audio, fs, Tw, Ts, alpha, ...
-    hammingWindow, R, M, N, L);
+frameShiftSamplesLPC = ...
+    round(frameShiftLPC * fs / 1000);
 
 
-%% =========================================================
-%  LPC EXTRACTION
-% ==========================================================
+%% FRAME AUDIO FOR LPC
 
-% Pre-emphasis
-audio_pre = filter([1 -alpha], 1, audio);
-
-% Frame the audio
-lpcFrames = vec2frames( ...
-    audio_pre, ...
-    frameLength, ...
-    frameShift, ...
+LPCFrames = vec2frames( ...
+    audio, ...
+    frameLengthLPC, ...
+    frameShiftSamplesLPC, ...
     'cols', ...
     hammingWindow, ...
     false);
 
 
-% Number of LPC frames
-numLPCFrames = size(lpcFrames,2);
+%% NUMBER OF LPC FRAMES
 
-% Pre-allocate LPC feature matrix
-LPC = zeros(p, numLPCFrames);
+numLPCFrames = size(LPCFrames,2);
 
 
-%% =========================================================
-%  EXTRACT 10 LPC COEFFICIENTS
-% ==========================================================
+%% PRE-ALLOCATE
+
+LPC = zeros(p,numLPCFrames);
+
+
+%% EXTRACT LPC
 
 for i = 1:numLPCFrames
 
-    currentFrame = lpcFrames(:,i);
+    currentFrame = LPCFrames(:,i);
 
-    % LPC analysis
-    [A,G,a,r] = autolpc(currentFrame,p);
+    [A,G,a,r] = autolpc( ...
+        currentFrame,p);
 
-    % Store 10 LPC coefficients
     LPC(:,i) = a(1:p);
 
 end
 
 
 %% =========================================================
-%  MATCH NUMBER OF FRAMES
+% LPC STATISTICS
 % ==========================================================
 
-% MFCC and LPC may produce slightly different
-% numbers of frames because their frame lengths differ.
+LPC_Mean = mean(LPC,2);
 
-numFrames = min( ...
-    size(LPC,2), ...
-    size(MFCC,2));
-
-
-LPC = LPC(:,1:numFrames);
-MFCC = MFCC(:,1:numFrames);
+LPC_Std = std(LPC,0,2);
 
 
 %% =========================================================
-%  LPC + MFCC FEATURE FUSION
+% =========================================================
+% PART B: MFCC EXTRACTION
+% =========================================================
 % ==========================================================
 
-FusedFeatures = [
-    LPC;
-    MFCC
+Tw = 25;
+Ts = 10;
+
+alpha = 0.97;
+
+R = [300 3700];
+
+M = 20;
+
+N = 13;
+
+L = 22;
+
+
+%% EXTRACT MFCC
+
+[MFCC,FBE,frames] = mfcc( ...
+    audio, ...
+    fs, ...
+    Tw, ...
+    Ts, ...
+    alpha, ...
+    hammingWindow, ...
+    R, ...
+    M, ...
+    N, ...
+    L);
+
+
+%% =========================================================
+% DELTA MFCC
+% ==========================================================
+
+DeltaMFCC = zeros(size(MFCC));
+
+for c = 1:N
+
+    DeltaMFCC(c,:) = ...
+        gradient(MFCC(c,:));
+
+end
+
+
+%% =========================================================
+% DELTA-DELTA MFCC
+% ==========================================================
+
+DeltaDeltaMFCC = ...
+    zeros(size(MFCC));
+
+for c = 1:N
+
+    DeltaDeltaMFCC(c,:) = ...
+        gradient(DeltaMFCC(c,:));
+
+end
+
+
+%% =========================================================
+% MFCC STATISTICS
+% ==========================================================
+
+MFCC_Mean = mean(MFCC,2);
+
+MFCC_Std = std(MFCC,0,2);
+
+
+%% =========================================================
+% DELTA STATISTICS
+% ==========================================================
+
+Delta_Mean = mean(DeltaMFCC,2);
+
+
+%% =========================================================
+% DELTA-DELTA STATISTICS
+% ==========================================================
+
+DeltaDelta_Mean = ...
+    mean(DeltaDeltaMFCC,2);
+
+
+%% =========================================================
+% 65-DIMENSIONAL MFCC VECTOR
+% ==========================================================
+
+MFCC65 = [
+
+    MFCC_Mean;
+    Delta_Mean;
+    DeltaDelta_Mean;
+    MFCC_Mean;
+    MFCC_Std
+
 ];
 
 
 %% =========================================================
-%  DISPLAY RESULTS
+% 75-DIMENSIONAL LPC + MFCC VECTOR
 % ==========================================================
 
-disp('LPC feature size:');
-disp(size(LPC));
+FusedFeatures = [
 
-disp('MFCC feature size:');
-disp(size(MFCC));
+    LPC_Mean;
+    LPC_Std;
+    MFCC65
 
-disp('Fused LPC + MFCC feature size:');
-disp(size(FusedFeatures));
+];
 
 
 %% =========================================================
-%  SAVE FUSED FEATURES
+% DISPLAY DIMENSIONS
+% ==========================================================
+
+fprintf('\n========================================\n');
+fprintf('FEATURE EXTRACTION RESULTS\n');
+fprintf('========================================\n');
+
+fprintf('LPC mean       = %d\n',length(LPC_Mean));
+fprintf('LPC std        = %d\n',length(LPC_Std));
+
+fprintf('MFCC features  = %d\n',length(MFCC65));
+
+fprintf('Fused features = %d\n', ...
+    length(FusedFeatures));
+
+fprintf('========================================\n');
+
+
+%% =========================================================
+% SAVE
 % ==========================================================
 
 save('LPC_MFCC_Fused_Features.mat', ...
-     'FusedFeatures');
+    'FusedFeatures', ...
+    'LPC', ...
+    'MFCC', ...
+    'DeltaMFCC', ...
+    'DeltaDeltaMFCC', ...
+    'MFCC65');
+
 
 writematrix( ...
     FusedFeatures', ...
     'LPC_MFCC_Fused_Features.csv');
+
+
+fprintf('\nFeatures saved successfully.\n');
