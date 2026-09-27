@@ -1,59 +1,137 @@
-% test_lpc.m
 
-% load speech from file 1A.waV
-[xx,fs]=loadwav('2937-1-0-0.wav');
-% [xx,fs]=loadwav('test_16k.wav');
+clc;
+clear;
+close all;
 
-% define lpc parameters
-L=40*fs/1000;
-p=10;                 % LPC order = 10
-nfft=1000;
-ss=5000;
-% ss=1430;
+%% =========================================================
+% LPC FEATURE EXTRACTION
+% 10 LPC COEFFICIENTS PER FRAME
+% ==========================================================
 
-% plot stft
-xs=xx(ss:ss+L-1).*hamming(L)/32768.;
-XS=20*log10(abs(fft(xs,nfft)));
+%% LOAD PREPROCESSED 3-SECOND AUDIO SEGMENT
 
-% lpc analysis (rectangular window)
-x=xx(ss:ss+L-1)/32768;
-[A,G,a,r]=autolpc(x,p);
+[file, path] = uigetfile('*.wav', ...
+    'Select a preprocessed 3-second WAV segment');
 
-% lpc spectrum
-denom=[1 -a(1:p)'];
-xs2=20*log10(G)-20*log10(abs(fft(denom,nfft)));
+if isequal(file,0)
+    error('No audio file selected.');
+end
 
-% plot lpc spectrum
-figure(1);subplot(211),plot(xs2(1:nfft/2),'b');
-hold on;
-plot(XS(1:nfft/2),'m');
+[audio, fs] = audioread(fullfile(path,file));
 
-% lpc analysis (Hamming window)
-x=xx(ss:ss+L-1).*hamming(L)/32768.;
-[A,G,a,r]=autolpc(x,p);
-denom=[1 -a(1:p)'];
 
-% lpc spectrum
-xs2=20*log10(G)-20*log10(abs(fft(denom,nfft)));
-plot(xs2(1:nfft/2),'r');
+%% =========================================================
+% CONVERT TO MONO
+% ==========================================================
 
-% window compensation
-Uh=sum(hamming(L).^2)/L;
-Uhlog=10*log10(Uh);
+if size(audio,2) > 1
+    audio = mean(audio,2);
+end
 
-% Durbin ac routine
-wtype=1;              % Hamming window
-[R,E,k,alpha,G]=durbin(xx(ss:ss+L-1)/32768.,L,p,wtype);
-denom=[1 -alpha(1:p,p)'];
 
-% lpc spectrum
-xs2=20*log10(G)-20*log10(abs(fft(denom,nfft)));
-subplot(212),plot(xs2(1:nfft/2),'k');hold on;
+%% =========================================================
+% RESAMPLE TO 16 kHz
+% ==========================================================
 
-wtype=0;              % rectangular window
-[R,E,k,alpha,G]=durbin(xx(ss:ss+L-1)/32768.,L,p,wtype);
-denom=[1 -alpha(1:p,p)'];
+targetFs = 16000;
 
-% lpc spectrum
-xs2=20*log10(G)-20*log10(abs(fft(denom,nfft)));
-plot(xs2(1:nfft/2),'k:');
+if fs ~= targetFs
+    audio = resample(audio,targetFs,fs);
+    fs = targetFs;
+end
+
+
+%% =========================================================
+% LPC PARAMETERS
+% ==========================================================
+
+p = 10;                         % LPC order = 10
+
+frameDuration = 40;             % 40 ms
+frameShiftDuration = 10;        % 10 ms
+
+frameLength = round( ...
+    frameDuration * fs / 1000);
+
+frameShift = round( ...
+    frameShiftDuration * fs / 1000);
+
+
+%% =========================================================
+% HAMMING WINDOW
+% ==========================================================
+
+hammingWindow = ...
+    @(N) (0.54 - 0.46*cos(2*pi*(0:N-1)'/(N-1)));
+
+
+%% =========================================================
+% FRAME THE SIGNAL
+% ==========================================================
+
+LPCFrames = vec2frames( ...
+    audio, ...
+    frameLength, ...
+    frameShift, ...
+    'cols', ...
+    hammingWindow, ...
+    false);
+
+
+%% =========================================================
+% NUMBER OF FRAMES
+% ==========================================================
+
+numFrames = size(LPCFrames,2);
+
+
+%% =========================================================
+% PRE-ALLOCATE LPC MATRIX
+% ==========================================================
+
+LPC = zeros(p,numFrames);
+
+
+%% =========================================================
+% LPC EXTRACTION
+% ==========================================================
+
+for i = 1:numFrames
+
+    currentFrame = LPCFrames(:,i);
+
+    % LPC analysis
+    [A,G,a,r] = autolpc(currentFrame,p);
+
+    % Store 10 LPC coefficients
+    LPC(:,i) = a(1:p);
+
+end
+
+
+%% =========================================================
+% DISPLAY RESULTS
+% ==========================================================
+
+fprintf('\nLPC Feature Extraction Results\n');
+fprintf('Sampling frequency: %d Hz\n',fs);
+fprintf('Frame duration: %d ms\n',frameDuration);
+fprintf('Frame shift: %d ms\n',frameShiftDuration);
+fprintf('LPC order: %d\n',p);
+fprintf('Number of frames: %d\n',numFrames);
+
+fprintf('\nLPC feature matrix size:\n');
+disp(size(LPC));
+
+
+%% =========================================================
+% SAVE LPC FEATURES
+% ==========================================================
+
+save('LPC_Features.mat','LPC');
+
+writematrix( ...
+    LPC', ...
+    'LPC_Features.csv');
+
+fprintf('\nLPC features saved successfully.\n');
